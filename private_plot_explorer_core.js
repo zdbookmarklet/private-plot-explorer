@@ -11,7 +11,7 @@
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const API = 'https://api.zeta-ai.io';
-  const CORE_VERSION = '1.6.2';
+  const CORE_VERSION = '1.7.0';
   const UI_ID = 'zeta-private-plot-explorer-v1';
   const STATE_KEY = 'zeta_private_plot_explorer_state_v1';
   const POS_KEY = 'zeta_private_plot_explorer_pos_v1';
@@ -209,28 +209,54 @@
     return out.join('\n');
   }
 
-  function buildIndexForPlot(p) {
-    const values = {
-      title: p?.name ?? '',
-      shortDescription: p?.shortDescription ?? '',
-      longDescription: p?.longDescription ?? '',
-      characterName: getCharacterNames(p),
-      creatorName: getCreatorText(p),
-      creatorComment: p?.creatorComment ?? '',
-      conversations: getConversationText(p)
+  function getRawFieldValue(p, key) {
+    switch (key) {
+      case 'title': return p?.name ?? '';
+      case 'shortDescription': return p?.shortDescription ?? '';
+      case 'longDescription': return p?.longDescription ?? '';
+      case 'characterName': return getCharacterNames(p);
+      case 'creatorName': return getCreatorText(p);
+      case 'creatorComment': return p?.creatorComment ?? '';
+      case 'conversations': return getConversationText(p);
+      default: return '';
+    }
+  }
+
+  function getIndexEntry(p) {
+    if (!p?.id) return { values: {}, normalized: {} };
+    let entry = searchIndex.get(p.id);
+    if (!entry) {
+      entry = { values: {}, normalized: {} };
+      searchIndex.set(p.id, entry);
+    }
+    return entry;
+  }
+
+  function getIndexedField(p, key) {
+    const entry = getIndexEntry(p);
+    if (!(key in entry.values)) {
+      const raw = getRawFieldValue(p, key);
+      entry.values[key] = raw;
+      entry.normalized[key] = normalize(raw);
+    }
+    return {
+      value: entry.values[key],
+      normalized: entry.normalized[key]
     };
-    const normalized = {};
-    for (const [k, v] of Object.entries(values)) normalized[k] = normalize(v);
-    return { values, normalized };
   }
 
   function rebuildSearchIndex() {
+    // v1.7: do not eagerly process long plot details / conversation examples.
+    // Fields are normalized only when the user actually searches them.
     searchIndex = new Map();
-    for (const p of allPlots) if (p?.id) searchIndex.set(p.id, buildIndexForPlot(p));
   }
 
   function getFieldValues(p) {
-    return searchIndex.get(p?.id)?.values || buildIndexForPlot(p).values;
+    const out = {};
+    for (const key of Object.keys(FIELD_LABELS)) {
+      out[key] = getIndexedField(p, key).value;
+    }
+    return out;
   }
 
   const FIELD_LABELS = {
@@ -261,14 +287,13 @@
   function searchMatch(p, terms) {
     if (!terms.length) return { pass: true, fields: [] };
 
-    const idx = searchIndex.get(p?.id) || buildIndexForPlot(p);
     const enabled = Object.keys(state.fields).filter(k => state.fields[k]);
     if (!enabled.length) return { pass: false, fields: [] };
 
     const termMatches = terms.map(term => {
       const t = normalize(term);
       const hitFields = enabled.filter(k => {
-        const v = idx.normalized[k] || '';
+        const v = getIndexedField(p, k).normalized || '';
         return state.matchMode === 'EXACT' ? v === t : v.includes(t);
       });
       return { term, hitFields, hit: hitFields.length > 0 };
@@ -554,7 +579,7 @@
 
       do {
         page++;
-        let url = `${API}/v1/plots/creator?limit=15&isPrivate=true&orderBy.property=UPDATED_AT&orderBy.direction=DESC`;
+        let url = `${API}/v1/plots/creator?limit=200&isPrivate=true&orderBy.property=UPDATED_AT&orderBy.direction=DESC`;
         if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
 
         const data = await request('GET', url);
@@ -571,7 +596,6 @@
         if (page > 1000) throw new Error('페이지 수가 비정상적으로 많아 중단했습니다.');
       } while (cursor);
 
-      setStatus(`검색 인덱스 준비 중… ${allPlots.length}개`);
       rebuildSearchIndex();
       setStatus(`완료 · 비공개 플롯 ${allPlots.length}개`);
       recompute(true);
@@ -1005,15 +1029,13 @@
       .zpe-top { padding:10px; border-bottom:1px solid #f0eaeb; flex:0 0 auto; }
       .zpe-counts { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
       .zpe-count {
-        border:1px solid #eee5e7; background:#fff; border-radius:11px; padding:8px 5px;
-        text-align:center; line-height:1.25;
+        appearance:none; -webkit-appearance:none; width:100%; min-width:0;
+        border:1px solid #e6ebe5; background:#fff; color:#2f3531; border-radius:11px; padding:8px 5px;
+        text-align:center; line-height:1.25; font:inherit; cursor:pointer; box-shadow:none;
       }
       .zpe-count b { display:block; font-size:16px; margin-top:2px; }
-      .zpe-source-tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin-top:8px; }
-      .zpe-source-tabs button {
-        border:1px solid #eee4e5; background:#fff; border-radius:9px; padding:7px 4px; font-weight:700;
-      }
-      .zpe-source-tabs button.active { background:#fff1f4; border-color:#f2cfd7; }
+      .zpe-count.active { background:#e8f3e6; border-color:#94be98; color:#3f6248; }
+      .zpe-count:active { background:#d2e8cf; }
       .zpe-search-row { display:flex; gap:6px; margin-top:8px; align-items:stretch; }
       .zpe-search-buttons { display:flex; flex-direction:column; gap:5px; }
       .zpe-search-btn { border:0; background:#bfe3f8; color:#314b5c; border-radius:9px; padding:7px 11px; font-weight:900; }
@@ -1477,32 +1499,6 @@
         color:var(--zpe-muted) !important;
       }
 
-
-      /* v1.6.2: stat cards double as source filters */
-      #${UI_ID} .zpe-stats .zpe-stat {
-        appearance:none !important;
-        -webkit-appearance:none !important;
-        width:auto !important;
-        min-width:0 !important;
-        cursor:pointer !important;
-        background:#fff !important;
-        color:var(--zpe-text) !important;
-        border:1px solid var(--zpe-line) !important;
-        border-radius:12px !important;
-        font:inherit !important;
-        text-align:center !important;
-      }
-      #${UI_ID} .zpe-stats .zpe-stat.active {
-        background:var(--zpe-green-1) !important;
-        border-color:var(--zpe-green-4) !important;
-      }
-      #${UI_ID} .zpe-stats .zpe-stat:active {
-        background:var(--zpe-green-2) !important;
-      }
-      #${UI_ID} .zpe-source-tabs {
-        display:none !important;
-      }
-
       @media (max-width:430px) {
         .zpe-check-grid { grid-template-columns:1fr; }
         .zpe-filter-row { grid-template-columns:1fr; }
@@ -1525,15 +1521,9 @@
       <div class="zpe-content">
         <div class="zpe-top">
           <div class="zpe-counts">
-            <div class="zpe-count">전체 비캐<b id="zpe-count-all">0</b></div>
-            <div class="zpe-count">개인비캐<b id="zpe-count-personal">0</b></div>
-            <div class="zpe-count">가둔 공캐<b id="zpe-count-locked">0</b></div>
-          </div>
-
-          <div class="zpe-source-tabs">
-            <button type="button" data-source="ALL">전체</button>
-            <button type="button" data-source="PERSONAL">개인비캐</button>
-            <button type="button" data-source="LOCKED">가둔 공캐</button>
+            <button type="button" class="zpe-count" data-source="ALL">전체 비캐<b id="zpe-count-all">0</b></button>
+            <button type="button" class="zpe-count" data-source="PERSONAL">개인비캐<b id="zpe-count-personal">0</b></button>
+            <button type="button" class="zpe-count" data-source="LOCKED">가둔 공캐<b id="zpe-count-locked">0</b></button>
           </div>
 
           <div class="zpe-search-row">
