@@ -11,7 +11,7 @@
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const API = 'https://api.zeta-ai.io';
-  const CORE_VERSION = '1.7.1';
+  const CORE_VERSION = '1.7.2';
   const UI_ID = 'zeta-private-plot-explorer-v1';
   const STATE_KEY = 'zeta_private_plot_explorer_state_v1';
   const POS_KEY = 'zeta_private_plot_explorer_pos_v1';
@@ -42,7 +42,6 @@
   };
 
   let auth = null;
-  let authSource = null;
   let clientVersion = null;
   let nativeVersion = null;
   let userLanguage = 'KOREAN';
@@ -91,41 +90,24 @@
     try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch {}
   }
 
-  function loadStoredAuth() {
-    try {
-      const token = localStorage.getItem('mmkv.default\\TOKEN');
-      if (!token) return false;
-
-      const clean = String(token).trim();
-      if (!clean) return false;
-
-      auth = /^Bearer\s+/i.test(clean) ? clean : `Bearer ${clean}`;
-      authSource = 'localStorage';
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   function captureHeader(k, v) {
     const key = String(k || '').toLowerCase();
     const val = String(v || '');
-    const previousAuth = auth;
+    const hadAuth = !!auth;
 
-    if (key === 'authorization' && val) {
-      auth = val;
-      authSource = 'network';
-    }
+    if (key === 'authorization' && val) auth = val;
     if (key === 'x-client-version' && val) clientVersion = val;
     if (key === 'x-client-native-version' && val) nativeVersion = val;
     if (key === 'x-user-language' && val) userLanguage = val;
     if (key === 'x-device-type' && val) deviceType = val;
     if (key === 'x-client-type' && val) clientType = val;
 
-    if (key === 'authorization' && auth && auth !== previousAuth && panel && allPlots.length === 0) {
+    // Bookmarklet may be launched from any Zeta page.
+    // As soon as a normal Zeta API request exposes the auth header, load automatically.
+    if (!hadAuth && auth && panel && !loading && allPlots.length === 0) {
       setTimeout(() => {
         if (auth && panel && !loading && allPlots.length === 0) loadAllPlots();
-      }, 700);
+      }, 0);
     }
   }
 
@@ -153,6 +135,14 @@
       return origFetch.apply(this, arguments);
     };
   } catch {}
+
+  function wakeZetaAuth() {
+    // Verified on Zeta: visibilitychange causes an authenticated XHR.
+    // That request is captured by the hooks above, then loadAllPlots() starts automatically.
+    try {
+      document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+    } catch {}
+  }
 
   function apiHeaders(json = false) {
     const h = {
@@ -618,14 +608,7 @@
       setStatus(`완료 · 비공개 플롯 ${allPlots.length}개`);
       recompute(true);
     } catch (e) {
-      const msg = String(e?.message || e || '');
-      if (/^401\b/.test(msg) && authSource === 'localStorage') {
-        auth = null;
-        authSource = null;
-        setStatus('저장된 인증정보가 만료되었습니다. 제타의 새 인증정보를 기다리는 중…', true);
-      } else {
-        setStatus(`불러오기 실패: ${msg}`, true);
-      }
+      setStatus(`불러오기 실패: ${e.message || e}`, true);
     } finally {
       loading = false;
       refreshBtn.disabled = false;
@@ -1679,13 +1662,18 @@
     updateCounts();
     renderResults();
 
-    // Bookmarklet mode: use Zeta's stored login token immediately when available.
-    if (loadStoredAuth()) {
-      setStatus('인증 확인 · 비공개 플롯을 불러오는 중…');
-      setTimeout(loadAllPlots, 0);
-    } else {
-      setStatus('인증 정보를 기다리는 중… 제타 화면에서 잠시 기다리거나 한 번 이동하면 자동으로 불러옵니다.');
-    }
+    // Bookmarklet starts after Zeta's initial requests, so wake one harmless
+    // authenticated XHR automatically instead of asking the user to touch the page.
+    setStatus('인증 확인 중…');
+    setTimeout(wakeZetaAuth, 80);
+
+    setTimeout(() => {
+      if (auth) {
+        if (!loading && allPlots.length === 0) loadAllPlots();
+      } else {
+        setStatus('자동 인증을 기다리는 중… 자동으로 시작되지 않으면 제타 화면을 한 번 이동해 주세요.');
+      }
+    }, 1800);
   }
 
   function boot() {
