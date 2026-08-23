@@ -1,10 +1,17 @@
 (() => {
+  'use strict';
+
+  if (!/(^|\.)zeta-ai\.io$/i.test(location.hostname)) {
+    alert('Private Plot Explorer는 Zeta에서만 실행할 수 있습니다.');
+    return;
+  }
+
   if (window.__PRIVATE_PLOT_EXPLORER_CORE_LOADED__) return;
   window.__PRIVATE_PLOT_EXPLORER_CORE_LOADED__ = true;
-  'use strict';
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const API = 'https://api.zeta-ai.io';
+  const CORE_VERSION = '1.6.2';
   const UI_ID = 'zeta-private-plot-explorer-v1';
   const STATE_KEY = 'zeta_private_plot_explorer_state_v1';
   const POS_KEY = 'zeta_private_plot_explorer_pos_v1';
@@ -86,12 +93,22 @@
   function captureHeader(k, v) {
     const key = String(k || '').toLowerCase();
     const val = String(v || '');
+    const hadAuth = !!auth;
+
     if (key === 'authorization' && val) auth = val;
     if (key === 'x-client-version' && val) clientVersion = val;
     if (key === 'x-client-native-version' && val) nativeVersion = val;
     if (key === 'x-user-language' && val) userLanguage = val;
     if (key === 'x-device-type' && val) deviceType = val;
     if (key === 'x-client-type' && val) clientType = val;
+
+    // Bookmarklet may be launched from any Zeta page.
+    // As soon as a normal Zeta API request exposes the auth header, load automatically.
+    if (!hadAuth && auth && panel && !loading && allPlots.length === 0) {
+      setTimeout(() => {
+        if (auth && panel && !loading && allPlots.length === 0) loadAllPlots();
+      }, 0);
+    }
   }
 
   // Capture the page's existing API headers without storing them persistently.
@@ -1460,6 +1477,32 @@
         color:var(--zpe-muted) !important;
       }
 
+
+      /* v1.6.2: stat cards double as source filters */
+      #${UI_ID} .zpe-stats .zpe-stat {
+        appearance:none !important;
+        -webkit-appearance:none !important;
+        width:auto !important;
+        min-width:0 !important;
+        cursor:pointer !important;
+        background:#fff !important;
+        color:var(--zpe-text) !important;
+        border:1px solid var(--zpe-line) !important;
+        border-radius:12px !important;
+        font:inherit !important;
+        text-align:center !important;
+      }
+      #${UI_ID} .zpe-stats .zpe-stat.active {
+        background:var(--zpe-green-1) !important;
+        border-color:var(--zpe-green-4) !important;
+      }
+      #${UI_ID} .zpe-stats .zpe-stat:active {
+        background:var(--zpe-green-2) !important;
+      }
+      #${UI_ID} .zpe-source-tabs {
+        display:none !important;
+      }
+
       @media (max-width:430px) {
         .zpe-check-grid { grid-template-columns:1fr; }
         .zpe-filter-row { grid-template-columns:1fr; }
@@ -1555,26 +1598,26 @@
               <input id="zpe-max" type="number" min="0" inputmode="numeric" placeholder="최대 대화량">
             </div>
 
-            <div class="zpe-section-title" style="margin-top:10px">내용 있음 / 없음</div>
+            <div class="zpe-section-title" style="margin-top:10px">필드 내용 여부</div>
             <div class="zpe-filter-row">
               <label>제목
                 <select data-presence="title">
-                  <option value="ANY">상관없음</option><option value="HAS">있음</option><option value="NONE">없음</option>
+                  <option value="ANY">전체</option><option value="HAS">있음</option><option value="NONE">없음</option>
                 </select>
               </label>
               <label>소개글
                 <select data-presence="shortDescription">
-                  <option value="ANY">상관없음</option><option value="HAS">있음</option><option value="NONE">없음</option>
+                  <option value="ANY">전체</option><option value="HAS">있음</option><option value="NONE">없음</option>
                 </select>
               </label>
               <label>코멘트
                 <select data-presence="creatorComment">
-                  <option value="ANY">상관없음</option><option value="HAS">있음</option><option value="NONE">없음</option>
+                  <option value="ANY">전체</option><option value="HAS">있음</option><option value="NONE">없음</option>
                 </select>
               </label>
               <label>대화 예시
                 <select data-presence="conversations">
-                  <option value="ANY">상관없음</option><option value="HAS">있음</option><option value="NONE">없음</option>
+                  <option value="ANY">전체</option><option value="HAS">있음</option><option value="NONE">없음</option>
                 </select>
               </label>
             </div>
@@ -1624,7 +1667,7 @@
     // Let normal Zeta requests expose the auth header first.
     setTimeout(() => {
       if (auth) loadAllPlots();
-      else setStatus('Creator Center를 한 번 열거나 페이지를 새로고침하면 인증 후 자동 검색할 수 있습니다.');
+      else setStatus('인증 정보를 기다리는 중… 제타 화면에서 잠시 기다리거나 한 번 이동하면 자동으로 불러옵니다.');
     }, 1200);
   }
 
