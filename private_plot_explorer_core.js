@@ -11,7 +11,7 @@
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const API = 'https://api.zeta-ai.io';
-  const CORE_VERSION = '1.7.3';
+  const CORE_VERSION = '1.8.0';
   const UI_ID = 'zeta-private-plot-explorer-v1';
   const STATE_KEY = 'zeta_private_plot_explorer_state_v1';
   const POS_KEY = 'zeta_private_plot_explorer_pos_v1';
@@ -350,26 +350,73 @@
     return true;
   }
 
+  const SORT_LABELS = {
+    UPDATED: '업데이트일',
+    CREATED: '생성일',
+    INTERACTION: '대화량',
+    NAME: '이름'
+  };
+
+  function getSortParts() {
+    const raw = String(state.sort || 'UPDATED_DESC');
+    const m = raw.match(/^(UPDATED|CREATED|INTERACTION|NAME)_(ASC|DESC)$/);
+    return m ? { key: m[1], dir: m[2] } : { key: 'UPDATED', dir: 'DESC' };
+  }
+
+  function setSort(key, dir, rerender = true) {
+    state.sort = `${key}_${dir}`;
+    saveState();
+    updateSortUI();
+    if (rerender) recompute(false);
+  }
+
+  function updateSortUI() {
+    if (!panel) return;
+    const { key, dir } = getSortParts();
+    const label = panel.querySelector('#zpe-sort-label');
+    const direction = panel.querySelector('#zpe-sort-direction');
+    if (label) label.textContent = SORT_LABELS[key] || '업데이트일';
+    if (direction) {
+      direction.textContent = dir === 'DESC' ? '↓' : '↑';
+      direction.setAttribute('aria-label', dir === 'DESC' ? '내림차순, 누르면 오름차순' : '오름차순, 누르면 내림차순');
+      direction.title = dir === 'DESC' ? '내림차순 · 눌러서 오름차순' : '오름차순 · 눌러서 내림차순';
+    }
+    panel.querySelectorAll('[data-sort-key]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.sortKey === key);
+    });
+  }
+
   function sortPlots(arr) {
     const a = [...arr];
     const numTime = v => {
       const n = Date.parse(v || '');
       return Number.isFinite(n) ? n : 0;
     };
+    const { key, dir } = getSortParts();
+    const sign = dir === 'ASC' ? 1 : -1;
+
     a.sort((x, y) => {
-      switch (state.sort) {
-        case 'UPDATED_ASC':
-          return numTime(x?.updatedAt || x?.modifiedAt || x?.createdAt) - numTime(y?.updatedAt || y?.modifiedAt || y?.createdAt);
-        case 'INTERACTION_DESC':
-          return Number(y?.interactionCount || 0) - Number(x?.interactionCount || 0);
-        case 'INTERACTION_ASC':
-          return Number(x?.interactionCount || 0) - Number(y?.interactionCount || 0);
-        case 'NAME_ASC':
-          return String(x?.name || '').localeCompare(String(y?.name || ''), 'ko');
-        case 'UPDATED_DESC':
+      let cmp = 0;
+      switch (key) {
+        case 'CREATED':
+          cmp = numTime(x?.createdAt) - numTime(y?.createdAt);
+          break;
+        case 'INTERACTION':
+          cmp = Number(x?.interactionCount || 0) - Number(y?.interactionCount || 0);
+          break;
+        case 'NAME':
+          cmp = String(x?.name || '').localeCompare(String(y?.name || ''), 'ko-KR', {
+            numeric: true,
+            sensitivity: 'base'
+          });
+          break;
+        case 'UPDATED':
         default:
-          return numTime(y?.updatedAt || y?.modifiedAt || y?.createdAt) - numTime(x?.updatedAt || x?.modifiedAt || x?.createdAt);
+          cmp = numTime(x?.updatedAt || x?.modifiedAt || x?.createdAt) -
+                numTime(y?.updatedAt || y?.modifiedAt || y?.createdAt);
+          break;
       }
+      return cmp * sign;
     });
     return a;
   }
@@ -679,7 +726,7 @@
   function setStatus(text, danger = false) {
     if (!statusEl) return;
     statusEl.textContent = text;
-    statusEl.classList.toggle('danger', !!danger);
+    panel?.querySelector('#zpe-status-wrap')?.classList.toggle('danger', !!danger);
   }
 
   function applyStateToUI() {
@@ -692,7 +739,7 @@
     panel.querySelector('#zpe-interaction-mode').value = state.interactionMode;
     panel.querySelector('#zpe-min').value = state.interactionMin;
     panel.querySelector('#zpe-max').value = state.interactionMax;
-    panel.querySelector('#zpe-sort').value = state.sort;
+    updateSortUI();
 
     updateFieldSummary();
   }
@@ -744,8 +791,7 @@
     const bindings = [
       ['#zpe-logic', 'logic'],
       ['#zpe-match', 'matchMode'],
-      ['#zpe-interaction-mode', 'interactionMode'],
-      ['#zpe-sort', 'sort']
+      ['#zpe-interaction-mode', 'interactionMode']
     ];
 
     for (const [sel, key] of bindings) {
@@ -754,6 +800,35 @@
         saveState();
       });
     }
+
+    const sortMenuBtn = panel.querySelector('#zpe-sort-menu-btn');
+    const sortPopup = panel.querySelector('#zpe-sort-popup');
+    const sortDirection = panel.querySelector('#zpe-sort-direction');
+
+    sortMenuBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      sortPopup.hidden = !sortPopup.hidden;
+    });
+
+    panel.querySelectorAll('[data-sort-key]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const { dir } = getSortParts();
+        setSort(btn.dataset.sortKey, dir, true);
+        sortPopup.hidden = true;
+      });
+    });
+
+    sortDirection.addEventListener('click', () => {
+      const { key, dir } = getSortParts();
+      setSort(key, dir === 'DESC' ? 'ASC' : 'DESC', true);
+    });
+
+    document.addEventListener('click', e => {
+      if (!sortPopup.hidden && !e.target.closest('.zpe-sort-menu-wrap')) {
+        sortPopup.hidden = true;
+      }
+    });
 
     panel.querySelector('#zpe-min').addEventListener('input', debounce(e => {
       state.interactionMin = e.target.value;
@@ -1507,6 +1582,155 @@
         color:var(--zpe-muted) !important;
       }
 
+
+      /* v1.8 sort controls + compact search */
+      #${UI_ID} #zpe-query {
+        min-height:46px !important;
+        height:46px !important;
+        max-height:64px !important;
+        resize:vertical !important;
+        padding:10px 11px !important;
+        line-height:1.35 !important;
+      }
+      #${UI_ID} .zpe-search-buttons {
+        min-height:46px !important;
+      }
+      #${UI_ID} .zpe-search-buttons button {
+        min-height:0 !important;
+        flex:1 1 0 !important;
+        padding:5px 10px !important;
+      }
+      #${UI_ID} .zpe-filter-row-single {
+        grid-template-columns:minmax(0,1fr) !important;
+      }
+
+      #${UI_ID} .zpe-status {
+        min-height:44px !important;
+        padding:6px 10px !important;
+        display:flex !important;
+        align-items:center !important;
+        justify-content:space-between !important;
+        gap:8px !important;
+        overflow:visible !important;
+        position:relative !important;
+      }
+      #${UI_ID} #zpe-status {
+        flex:1 1 auto;
+        min-width:0;
+        color:#6e776f;
+        line-height:1.3;
+      }
+      #${UI_ID} .zpe-status.danger #zpe-status {
+        color:#b8444c !important;
+      }
+
+      #${UI_ID} .zpe-sort-control {
+        flex:0 0 auto;
+        display:flex;
+        align-items:stretch;
+        height:30px;
+        border:1px solid var(--zpe-line-green);
+        border-radius:8px;
+        background:#fff;
+      }
+      #${UI_ID} .zpe-sort-menu-wrap {
+        position:relative;
+        display:flex;
+      }
+      #${UI_ID} .zpe-sort-menu-btn,
+      #${UI_ID} .zpe-sort-direction {
+        appearance:none;
+        -webkit-appearance:none;
+        border:0 !important;
+        background:#fff !important;
+        color:#496052 !important;
+        margin:0 !important;
+        padding:0 8px !important;
+        min-height:28px !important;
+        height:28px !important;
+        font:inherit;
+        font-weight:750;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        gap:5px;
+      }
+      #${UI_ID} .zpe-sort-menu-btn {
+        border-radius:7px 0 0 7px !important;
+        white-space:nowrap;
+      }
+      #${UI_ID} .zpe-sort-direction {
+        width:32px !important;
+        min-width:32px !important;
+        border-left:1px solid var(--zpe-line-green) !important;
+        border-radius:0 7px 7px 0 !important;
+        font-size:18px !important;
+        line-height:1 !important;
+        padding:0 !important;
+      }
+      #${UI_ID} .zpe-sort-menu-btn:active,
+      #${UI_ID} .zpe-sort-direction:active {
+        background:var(--zpe-green-1) !important;
+      }
+      #${UI_ID} .zpe-sort-lines {
+        width:14px;
+        height:12px;
+        display:flex;
+        flex-direction:column;
+        justify-content:space-between;
+      }
+      #${UI_ID} .zpe-sort-lines i {
+        display:block;
+        height:1.5px;
+        border-radius:2px;
+        background:#58705e;
+      }
+      #${UI_ID} .zpe-sort-lines i:nth-child(1){width:14px}
+      #${UI_ID} .zpe-sort-lines i:nth-child(2){width:10px}
+      #${UI_ID} .zpe-sort-lines i:nth-child(3){width:6px}
+
+      #${UI_ID} .zpe-sort-popup {
+        position:absolute;
+        right:0;
+        top:34px;
+        width:148px;
+        padding:5px;
+        background:#fff;
+        border:1px solid var(--zpe-line-green);
+        border-radius:10px;
+        box-shadow:0 7px 20px rgba(55,72,58,.13);
+        z-index:40;
+      }
+      #${UI_ID} .zpe-sort-popup[hidden] {
+        display:none !important;
+      }
+      #${UI_ID} .zpe-sort-popup button {
+        width:100%;
+        min-height:34px;
+        padding:7px 9px !important;
+        border:0 !important;
+        border-radius:7px !important;
+        background:#fff !important;
+        color:#38473c !important;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        text-align:left;
+        font-weight:700;
+      }
+      #${UI_ID} .zpe-sort-popup button span {
+        visibility:hidden;
+        color:#5f8f6a;
+        font-weight:900;
+      }
+      #${UI_ID} .zpe-sort-popup button.active {
+        background:var(--zpe-green-1) !important;
+        color:#3f6248 !important;
+      }
+      #${UI_ID} .zpe-sort-popup button.active span {
+        visibility:visible;
+      }
+
       @media (max-width:430px) {
         .zpe-check-grid { grid-template-columns:1fr; }
         .zpe-filter-row { grid-template-columns:1fr; }
@@ -1535,7 +1759,7 @@
           </div>
 
           <div class="zpe-search-row">
-            <textarea id="zpe-query" rows="2" placeholder="검색어 입력 · 여러 개는 쉼표 또는 줄바꿈"></textarea>
+            <textarea id="zpe-query" rows="1" placeholder="검색어 입력 · 여러 개는 쉼표 또는 줄바꿈"></textarea>
             <div class="zpe-search-buttons">
               <button id="zpe-search-run" class="zpe-search-btn" type="button">검색</button>
               <button id="zpe-filter-toggle" class="zpe-soft-btn" type="button">필터</button>
@@ -1570,22 +1794,13 @@
               </label>
             </div>
 
-            <div class="zpe-filter-row">
+            <div class="zpe-filter-row zpe-filter-row-single">
               <label>대화량
                 <select id="zpe-interaction-mode">
                   <option value="ALL">전체</option>
                   <option value="ZERO">0</option>
                   <option value="POSITIVE">1 이상</option>
                   <option value="RANGE">범위 지정</option>
-                </select>
-              </label>
-              <label>정렬
-                <select id="zpe-sort">
-                  <option value="UPDATED_DESC">최근 수정순</option>
-                  <option value="UPDATED_ASC">오래된순</option>
-                  <option value="INTERACTION_DESC">대화량 많은순</option>
-                  <option value="INTERACTION_ASC">대화량 적은순</option>
-                  <option value="NAME_ASC">이름순</option>
                 </select>
               </label>
             </div>
@@ -1630,7 +1845,24 @@
           <button id="zpe-refresh" class="zpe-soft-btn" type="button">새로고침</button>
         </div>
 
-        <div id="zpe-status" class="zpe-status">데이터를 불러올 준비 중…</div>
+        <div id="zpe-status-wrap" class="zpe-status">
+          <span id="zpe-status">데이터를 불러올 준비 중…</span>
+          <div class="zpe-sort-control">
+            <div class="zpe-sort-menu-wrap">
+              <button id="zpe-sort-menu-btn" class="zpe-sort-menu-btn" type="button" aria-label="정렬 기준 선택">
+                <span class="zpe-sort-lines" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span id="zpe-sort-label">업데이트일</span>
+              </button>
+              <div id="zpe-sort-popup" class="zpe-sort-popup" hidden>
+                <button type="button" data-sort-key="UPDATED">업데이트일 <span>✓</span></button>
+                <button type="button" data-sort-key="CREATED">생성일 <span>✓</span></button>
+                <button type="button" data-sort-key="INTERACTION">대화량 <span>✓</span></button>
+                <button type="button" data-sort-key="NAME">이름 <span>✓</span></button>
+              </div>
+            </div>
+            <button id="zpe-sort-direction" class="zpe-sort-direction" type="button" aria-label="내림차순, 누르면 오름차순">↓</button>
+          </div>
+        </div>
         <div id="zpe-results" class="zpe-results"></div>
         <button id="zpe-delete" class="zpe-delete" type="button" disabled>선택 삭제</button>
       </div>
