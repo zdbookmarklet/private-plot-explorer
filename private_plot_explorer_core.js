@@ -11,7 +11,7 @@
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const API = 'https://api.zeta-ai.io';
-  const CORE_VERSION = '1.8.0';
+  const CORE_VERSION = '1.8.1';
   const UI_ID = 'zeta-private-plot-explorer-v1';
   const STATE_KEY = 'zeta_private_plot_explorer_state_v1';
   const POS_KEY = 'zeta_private_plot_explorer_pos_v1';
@@ -191,10 +191,10 @@
   }
 
   function getCreatorText(p) {
-    return [
+    return [...new Set([
       p?.creator?.nickname,
       p?.creator?.username
-    ].filter(Boolean).join(' ');
+    ].filter(Boolean))].join(' ');
   }
 
   function getCharacterNames(p) {
